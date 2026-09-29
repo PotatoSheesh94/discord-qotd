@@ -7,9 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       duration:
-        description: "Countdown duration in minutes"
+        description: "How many minutes should the QOTD last?"
         required: true
         default: "10"
+        type: string
 
 permissions:
   contents: write
@@ -18,7 +19,7 @@ jobs:
   qotd:
     runs-on: ubuntu-latest
 
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -36,11 +37,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      - name: Set QOTD duration
+        shell: bash
+        env:
+          MANUAL_DURATION: ${{ inputs.duration }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "QOTD_DURATION=$MANUAL_DURATION" >> "$GITHUB_ENV"
+            echo "Manual QOTD duration: $MANUAL_DURATION minutes"
+          else
+            echo "QOTD_DURATION=10" >> "$GITHUB_ENV"
+            echo "Scheduled QOTD duration: 10 minutes"
+          fi
+
+      - name: Show duration
+        run: |
+          echo "QOTD_DURATION=$QOTD_DURATION"
+
       - name: Run Question of the Day
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          QOTD_DURATION: ${{ env.QOTD_DURATION }}
         run: |
           python qotd.py
 
