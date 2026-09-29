@@ -1,0 +1,33 @@
+name: Daily Question of the Day
+
+on:
+  schedule:
+    # 9:00 AM Philippines time every day
+    - cron: "0 9 * * *"
+      timezone: "Asia/Manila"
+
+  # Allows you to manually run the workflow
+  workflow_dispatch:
+
+jobs:
+  send-qotd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Send Question of the Day
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python qotd.py
