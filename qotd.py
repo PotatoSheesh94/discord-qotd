@@ -1,10 +1,7 @@
 import os
 import json
-import html
 import random
 import hashlib
-import re
-import time
 from pathlib import Path
 
 import requests
@@ -15,60 +12,275 @@ import requests
 # ============================================================
 
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
-BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
-CHANNEL_ID = os.environ["DISCORD_CHANNEL_ID"]
 
 WEBHOOK_NAME = "Nickolas Lilly Assistant"
-
-API_URL = "https://opentdb.com/api.php"
-DISCORD_API = "https://discord.com/api/v10"
-
-# GitHub Actions provides this value.
-# If it is missing, the default is 10 minutes.
-try:
-    DURATION_MINUTES = float(
-        os.environ.get("QOTD_DURATION", "10").strip()
-    )
-except ValueError:
-    DURATION_MINUTES = 10
-
-if DURATION_MINUTES <= 0:
-    DURATION_MINUTES = 10
-
-COUNTDOWN_SECONDS = int(DURATION_MINUTES * 60)
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
-CURRENT_FILE = DATA_DIR / "current_question.json"
 USED_FILE = DATA_DIR / "used_questions.json"
-LEADERBOARD_FILE = DATA_DIR / "leaderboard.json"
 
 
-# Open Trivia DB categories
-CATEGORIES = [
-    9,   # General Knowledge
-    10,  # Books
-    11,  # Film
-    12,  # Music
-    14,  # Television
-    15,  # Video Games
-    16,  # Board Games
-    17,  # Science & Nature
-    18,  # Computers
-    19,  # Mathematics
-    20,  # Mythology
-    21,  # Sports
-    22,  # Geography
-    23,  # History
-    25,  # Art
-    26,  # Celebrities
-    27,  # Animals
-    28,  # Vehicles
-    29,  # Comics
-    30,  # Gadgets
-    31,  # Anime & Manga
-    32,  # Cartoons & Animation
+# ============================================================
+# QUESTION BANK
+# ============================================================
+
+QUESTIONS = [
+
+    # --------------------------------------------------------
+    # GENERAL / PERSONAL
+    # --------------------------------------------------------
+
+    "What's something small that always makes your day better?",
+
+    "What's something you could talk about for hours without getting bored?",
+
+    "If you could instantly learn one new skill, what would you choose?",
+
+    "What's something you wish more people understood about you?",
+
+    "What's one thing you're looking forward to right now?",
+
+    "What's something you've recently discovered that you really like?",
+
+    "What's one thing you would like to improve about yourself?",
+
+    "What's something you used to dislike but now enjoy?",
+
+    "What's something you think everyone should experience at least once?",
+
+    "What's something that can instantly put you in a better mood?",
+
+    "What's one thing you would never get tired of doing?",
+
+    "What's something you wish you had more time for?",
+
+    "What's one piece of advice that has stayed with you?",
+
+    "What's something you are proud of accomplishing?",
+
+    "What's something you want to try someday but haven't had the chance to?",
+
+
+    # --------------------------------------------------------
+    # HYPOTHETICAL
+    # --------------------------------------------------------
+
+    "If you could live anywhere in the world for one year, where would you go?",
+
+    "If you suddenly had an entire week with no responsibilities, how would you spend it?",
+
+    "If you could have any fictional character as a friend, who would you choose?",
+
+    "If you could instantly become amazing at one creative skill, what would it be?",
+
+    "If you could relive one day from your past, which day would you choose?",
+
+    "If you could create your own holiday, what would it celebrate?",
+
+    "If you could have any animal as a companion, what would you choose?",
+
+    "If you could wake up tomorrow with one new talent, what would it be?",
+
+    "If you could visit any fictional world, which one would you visit?",
+
+    "If you could have unlimited money for one day but couldn't keep it, what would you do with it?",
+
+    "If you could instantly understand one language, which language would you choose?",
+
+    "If you could switch lives with any fictional character for one day, who would you pick?",
+
+    "If you could design your dream room, what would you put in it?",
+
+    "If you could create your own video game, what would it be about?",
+
+    "If you could spend one day doing anything you wanted with no consequences, what would you do?",
+
+
+    # --------------------------------------------------------
+    # VOICE ACTING
+    # --------------------------------------------------------
+
+    "If you could voice any fictional character, who would you choose?",
+
+    "What's your favorite type of character to voice?",
+
+    "What makes a voice acting performance memorable to you?",
+
+    "What's a voice acting skill you'd like to improve?",
+
+    "If you could work on any animated movie or series, what would you want to work on?",
+
+    "What's more important for a voice actor: emotion, character voice, or timing?",
+
+    "Have you ever heard a voice actor who completely changed how you saw a character?",
+
+    "What kind of character would be the most fun for you to voice?",
+
+    "Would you rather voice the hero, villain, or comic relief character?",
+
+    "If you created your own character, what would their voice sound like?",
+
+
+    # --------------------------------------------------------
+    # ART
+    # --------------------------------------------------------
+
+    "What kind of art do you enjoy making the most?",
+
+    "What usually inspires you to create something?",
+
+    "What's an art style you'd like to try?",
+
+    "Do you prefer drawing characters, environments, or objects?",
+
+    "What's something you've always wanted to draw but haven't yet?",
+
+    "What makes artwork stand out to you?",
+
+    "Do you prefer creating art digitally or traditionally?",
+
+    "What's one artist or art style that inspires you?",
+
+    "If you could instantly master one art technique, which would it be?",
+
+    "What is your favorite part of the creative process?",
+
+
+    # --------------------------------------------------------
+    # WRITING
+    # --------------------------------------------------------
+
+    "What's your favorite type of story to write?",
+
+    "What makes a character feel realistic to you?",
+
+    "Would you rather write a hero, villain, or morally gray character?",
+
+    "What's more important in a story: characters, worldbuilding, or plot?",
+
+    "What's a story idea you've always wanted to write?",
+
+    "What kind of ending do you enjoy most?",
+
+    "What's one writing skill you'd like to improve?",
+
+    "Do you prefer writing short stories or long stories?",
+
+    "What makes you want to keep reading a story?",
+
+    "If you could create a fictional world, what would it be like?",
+
+
+    # --------------------------------------------------------
+    # MUSIC
+    # --------------------------------------------------------
+
+    "What song can you listen to over and over without getting tired of it?",
+
+    "What kind of music do you usually listen to when you're relaxing?",
+
+    "What's a song that brings back a specific memory for you?",
+
+    "If you could meet any musician, who would you want to meet?",
+
+    "What kind of music helps you concentrate?",
+
+    "What's a music genre you'd like to explore more?",
+
+    "Do you prefer listening to music while working or in complete silence?",
+
+    "What's one song you think everyone should hear at least once?",
+
+    "If you could create a song with any artist, who would you choose?",
+
+    "What makes a song memorable to you?",
+
+
+    # --------------------------------------------------------
+    # GAMING
+    # --------------------------------------------------------
+
+    "What's a game you could play for hundreds of hours?",
+
+    "What's your favorite type of video game?",
+
+    "What's a game you wish you could experience again for the first time?",
+
+    "What's the most memorable gaming moment you've had?",
+
+    "Would you rather play solo or with friends?",
+
+    "What's one game you think deserves more attention?",
+
+    "If you could create your own game, what would it be like?",
+
+    "What's more important to you in a game: story, gameplay, graphics, or music?",
+
+    "What's a game character you really like?",
+
+    "What's one gaming feature you wish more games had?",
+
+
+    # --------------------------------------------------------
+    # COMMUNITY
+    # --------------------------------------------------------
+
+    "What's your favorite thing about being part of a creative community?",
+
+    "What would make a Discord server feel more welcoming to you?",
+
+    "What's something you'd like to see more of in this community?",
+
+    "What's your favorite way to meet new people online?",
+
+    "What's something that makes you want to stay in an online community?",
+
+    "What kind of community event would you enjoy joining?",
+
+    "Would you rather join a voice acting event, art event, writing event, or gaming event?",
+
+    "What's one thing that can make an online conversation more fun?",
+
+    "What's something you think every creative community should have?",
+
+    "What's your favorite way to show support for another creator?",
+
+
+    # --------------------------------------------------------
+    # FUN / RANDOM
+    # --------------------------------------------------------
+
+    "What's the weirdest food combination you actually enjoy?",
+
+    "What's a completely random fact you know?",
+
+    "What's something you find funny that probably shouldn't be that funny?",
+
+    "What's the most random thing you've ever become interested in?",
+
+    "What's a useless skill you're surprisingly good at?",
+
+    "What's something you would never want to live without?",
+
+    "What's the strangest dream you remember having?",
+
+    "What's a random thing that annoys you more than it probably should?",
+
+    "What's something you think is overrated?",
+
+    "What's something you think is underrated?",
+
+    "If your life had a soundtrack, what kind of music would be playing?",
+
+    "What's the first thing you'd buy if someone gave you $1,000?",
+
+    "What's your most unusual hobby?",
+
+    "What's a fictional world you absolutely would not want to live in?",
+
+    "What's the funniest username you've ever seen?",
+
 ]
 
 
@@ -83,6 +295,7 @@ def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
+
     except Exception as error:
         print(f"Could not read {path}: {error}")
         return default
@@ -99,952 +312,126 @@ def save_json(path, data):
 
 
 # ============================================================
-# DISCORD API
+# QUESTION SELECTION
 # ============================================================
 
-def bot_headers():
-    return {
-        "Authorization": f"Bot {BOT_TOKEN}",
-        "Content-Type": "application/json",
+def question_hash(question):
+    return hashlib.sha256(
+        question.strip().lower().encode("utf-8")
+    ).hexdigest()
+
+
+def get_question():
+    used_questions = load_json(
+        USED_FILE,
+        []
+    )
+
+    available_questions = [
+        question
+        for question in QUESTIONS
+        if question_hash(question)
+        not in used_questions
+    ]
+
+    # If every question has been used,
+    # start a fresh cycle.
+    if not available_questions:
+        print("All questions have been used.")
+        print("Starting a new question cycle.")
+
+        used_questions = []
+
+        available_questions = QUESTIONS.copy()
+
+    question = random.choice(
+        available_questions
+    )
+
+    question_id = question_hash(
+        question
+    )
+
+    used_questions.append(
+        question_id
+    )
+
+    save_json(
+        USED_FILE,
+        used_questions
+    )
+
+    return question
+
+
+# ============================================================
+# DISCORD WEBHOOK
+# ============================================================
+
+def send_question(question):
+    payload = {
+        "username": WEBHOOK_NAME,
+
+        "embeds": [
+            {
+                "title": "💭 Question of the Day",
+
+                "description": (
+                    f"**{question}**"
+                    "\n\n"
+                    "💬 Share your thoughts below!"
+                ),
+
+                "color": 65413,
+
+                "footer": {
+                    "text": (
+                        "Nickolas Lilly Assistant • "
+                        "Question of the Day"
+                    )
+                }
+            }
+        ]
     }
 
-
-def rename_webhook():
-    try:
-        response = requests.patch(
-            WEBHOOK_URL,
-            json={
-                "name": WEBHOOK_NAME
-            },
-            timeout=20
-        )
-
-        if response.status_code not in (200, 204):
-            print(
-                "Webhook rename failed:",
-                response.status_code,
-                response.text
-            )
-
-    except Exception as error:
-        print(
-            "Webhook rename error:",
-            error
-        )
-
-
-def send_webhook(
-    payload,
-    wait_for_message=False
-):
-    url = WEBHOOK_URL
-
-    if wait_for_message:
-        separator = "&" if "?" in url else "?"
-        url += separator + "wait=true"
-
     response = requests.post(
-        url,
+        WEBHOOK_URL,
         json=payload,
         timeout=30
     )
 
     if response.status_code not in (200, 204):
         raise RuntimeError(
-            f"Discord webhook error "
-            f"{response.status_code}: "
+            "Discord webhook failed: "
+            f"{response.status_code} "
             f"{response.text}"
         )
 
-    if wait_for_message and response.text:
-        return response.json()
-
-    return None
-
-
-def edit_webhook_message(
-    message_id,
-    payload
-):
-    try:
-        response = requests.patch(
-            f"{WEBHOOK_URL}/messages/{message_id}",
-            json=payload,
-            timeout=30
-        )
-
-        if response.status_code not in (200, 204):
-            print(
-                "Webhook message edit failed:",
-                response.status_code,
-                response.text
-            )
-
-        return response
-
-    except Exception as error:
-        print(
-            "Webhook message edit error:",
-            error
-        )
-
-        return None
-
-
-def send_bot_message(
-    content=None,
-    embed=None,
-    allowed_users=None
-):
-    payload = {}
-
-    if content:
-        payload["content"] = content
-
-    if embed:
-        payload["embeds"] = [embed]
-
-    if allowed_users:
-        payload["allowed_mentions"] = {
-            "users": allowed_users
-        }
-
-    try:
-        response = requests.post(
-            f"{DISCORD_API}/channels/{CHANNEL_ID}/messages",
-            headers=bot_headers(),
-            json=payload,
-            timeout=30
-        )
-
-        if response.status_code not in (200, 201):
-            print(
-                "Bot message failed:",
-                response.status_code,
-                response.text
-            )
-
-        return response
-
-    except Exception as error:
-        print(
-            "Bot message error:",
-            error
-        )
-
-        return None
-
-
-def get_messages_after(message_id):
-    try:
-        response = requests.get(
-            f"{DISCORD_API}/channels/"
-            f"{CHANNEL_ID}/messages",
-            headers=bot_headers(),
-            params={
-                "after": message_id,
-                "limit": 100
-            },
-            timeout=30
-        )
-
-        if response.status_code != 200:
-            print(
-                "Message fetch failed:",
-                response.status_code,
-                response.text
-            )
-            return []
-
-        messages = response.json()
-
-        # Discord normally returns oldest first
-        # for the "after" parameter.
-        messages.reverse()
-
-        return messages
-
-    except Exception as error:
-        print(
-            "Message fetch error:",
-            error
-        )
-
-        return []
+    print("Question successfully posted.")
 
 
 # ============================================================
-# QUESTION SYSTEM
+# MAIN
 # ============================================================
 
-def question_hash(question):
-    return hashlib.sha256(
-        question.strip()
-        .lower()
-        .encode("utf-8")
-    ).hexdigest()
-
-
-def get_random_question():
-    used_questions = load_json(
-        USED_FILE,
-        []
-    )
-
-    for attempt in range(10):
-        category = random.choice(
-            CATEGORIES
-        )
-
-        print(
-            f"Getting questions from "
-            f"category {category}..."
-        )
-
-        response = requests.get(
-            API_URL,
-            params={
-                "amount": 20,
-                "category": category,
-                "type": "multiple"
-            },
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        if data.get("response_code") != 0:
-            continue
-
-        questions = data.get(
-            "results",
-            []
-        )
-
-        random.shuffle(questions)
-
-        for item in questions:
-            question = html.unescape(
-                item["question"]
-            )
-
-            q_hash = question_hash(
-                question
-            )
-
-            if q_hash in used_questions:
-                continue
-
-            correct = html.unescape(
-                item["correct_answer"]
-            )
-
-            incorrect = [
-                html.unescape(answer)
-                for answer in item[
-                    "incorrect_answers"
-                ]
-            ]
-
-            answers = incorrect + [
-                correct
-            ]
-
-            random.shuffle(answers)
-
-            correct_index = answers.index(
-                correct
-            )
-
-            used_questions.append(
-                q_hash
-            )
-
-            # Keep the database from becoming huge.
-            if len(used_questions) > 5000:
-                used_questions = (
-                    used_questions[-5000:]
-                )
-
-            save_json(
-                USED_FILE,
-                used_questions
-            )
-
-            return {
-                "question": question,
-                "answers": answers,
-                "correct_index": correct_index,
-                "category": html.unescape(
-                    item["category"]
-                ),
-                "difficulty": (
-                    item["difficulty"]
-                    .capitalize()
-                ),
-                "hash": q_hash
-            }
-
-    raise RuntimeError(
-        "Could not find a new question."
-    )
-
-
-def letter_for_index(index):
-    return chr(
-        ord("A") + index
-    )
-
-
-# ============================================================
-# ANSWER PARSING
-# ============================================================
-
-def parse_answer(content):
-    text = content.strip()
-
-    # Accept:
-    #
-    # A
-    # A.
-    # A)
-    # Answer A
-    # Answer: A
-    # answer - A
-
-    match = re.fullmatch(
-        r"(?:answer\s*[:\-]?\s*)?"
-        r"([ABCD])"
-        r"[\.\)]?",
-        text,
-        re.IGNORECASE
-    )
-
-    if match:
-        return match.group(1).upper()
-
-    return None
-
-
-# ============================================================
-# LEADERBOARD
-# ============================================================
-
-def load_leaderboard():
-    return load_json(
-        LEADERBOARD_FILE,
-        {}
-    )
-
-
-def save_leaderboard(board):
-    save_json(
-        LEADERBOARD_FILE,
-        board
-    )
-
-
-def add_point(
-    board,
-    user
-):
-    user_id = str(
-        user["id"]
-    )
-
-    username = (
-        user.get("global_name")
-        or user.get("username")
-        or "Unknown User"
-    )
-
-    if user_id not in board:
-        board[user_id] = {
-            "username": username,
-            "points": 0
-        }
-
-    board[user_id]["username"] = username
-
-    board[user_id]["points"] += 1
-
-
-def leaderboard_text(board):
-    if not board:
-        return (
-            "No points have been earned yet."
-        )
-
-    sorted_users = sorted(
-        board.items(),
-        key=lambda item: item[1]["points"],
-        reverse=True
-    )
-
-    lines = []
-
-    for position, (
-        user_id,
-        data
-    ) in enumerate(
-        sorted_users[:10],
-        start=1
-    ):
-        points = data["points"]
-
-        point_word = (
-            "point"
-            if points == 1
-            else "points"
-        )
-
-        lines.append(
-            f"**{position}.** "
-            f"<@{user_id}> • "
-            f"**{points} {point_word}**"
-        )
-
-    return "\n".join(lines)
-
-
-# ============================================================
-# EMBEDS
-# ============================================================
-
-def build_question_embed(
-    question_data,
-    remaining_seconds
-):
-    minutes = remaining_seconds // 60
-    seconds = remaining_seconds % 60
-
-    timer = (
-        f"{minutes}:"
-        f"{seconds:02d}"
-    )
-
-    answers = "\n".join(
-        f"**{letter_for_index(i)}.** "
-        f"{answer}"
-        for i, answer in enumerate(
-            question_data["answers"]
-        )
-    )
-
-    return {
-        "title": "🧠 Question of the Day",
-
-        "description": (
-            f"**{question_data['question']}**"
-            f"\n\n"
-            f"{answers}"
-            f"\n\n"
-            f"⏱️ **Time remaining: "
-            f"{timer}**"
-            f"\n\n"
-            f"Reply with **A, B, C, or D** "
-            f"to submit your answer."
-        ),
-
-        "color": 65413,
-
-        "fields": [
-            {
-                "name": "📚 Category",
-                "value": question_data[
-                    "category"
-                ],
-                "inline": True
-            },
-            {
-                "name": "🎯 Difficulty",
-                "value": question_data[
-                    "difficulty"
-                ],
-                "inline": True
-            }
-        ],
-
-        "footer": {
-            "text": (
-                "Nickolas Lilly Assistant • "
-                "Question of the Day"
-            )
-        }
-    }
-
-
-def build_closed_embed(
-    question_data
-):
-    answers = "\n".join(
-        f"**{letter_for_index(i)}.** "
-        f"{answer}"
-        for i, answer in enumerate(
-            question_data["answers"]
-        )
-    )
-
-    return {
-        "title": "🧠 Question of the Day",
-
-        "description": (
-            f"**{question_data['question']}**"
-            f"\n\n"
-            f"{answers}"
-            f"\n\n"
-            f"⏱️ **Time remaining: 0:00**"
-            f"\n\n"
-            f"🔒 **Answers are now closed.**"
-        ),
-
-        "color": 65413,
-
-        "fields": [
-            {
-                "name": "📚 Category",
-                "value": question_data[
-                    "category"
-                ],
-                "inline": True
-            },
-            {
-                "name": "🎯 Difficulty",
-                "value": question_data[
-                    "difficulty"
-                ],
-                "inline": True
-            }
-        ],
-
-        "footer": {
-            "text": (
-                "Nickolas Lilly Assistant • "
-                "Question of the Day"
-            )
-        }
-    }
-
-
-def build_answer_embed(
-    question_data
-):
-    correct = question_data[
-        "answers"
-    ][
-        question_data[
-            "correct_index"
-        ]
-    ]
-
-    letter = letter_for_index(
-        question_data[
-            "correct_index"
-        ]
-    )
-
-    return {
-        "title": (
-            "💡 Question of the Day Answer"
-        ),
-
-        "description": (
-            "The correct answer was:"
-            "\n\n"
-            f"**{letter}. {correct}**"
-        ),
-
-        "color": 5763719,
-
-        "footer": {
-            "text": (
-                "Thanks for participating!"
-            )
-        }
-    }
-
-
-# ============================================================
-# MAIN QOTD
-# ============================================================
-
-def run_qotd():
+def main():
     print("=" * 60)
-    print("QUESTION OF THE DAY")
+    print("DAILY DISCUSSION QOTD")
     print("=" * 60)
 
-    print(
-        f"Duration selected: "
-        f"{DURATION_MINUTES} minute(s)"
-    )
+    question = get_question()
 
-    print(
-        f"Total seconds: "
-        f"{COUNTDOWN_SECONDS}"
-    )
+    print()
+    print("Selected question:")
+    print(question)
+    print()
 
-    rename_webhook()
+    send_question(question)
 
-    # --------------------------------------------------------
-    # Get question
-    # --------------------------------------------------------
-
-    question_data = (
-        get_random_question()
-    )
-
-    # --------------------------------------------------------
-    # Post question
-    # --------------------------------------------------------
-
-    initial_embed = (
-        build_question_embed(
-            question_data,
-            COUNTDOWN_SECONDS
-        )
-    )
-
-    question_message = send_webhook(
-        {
-            "username": WEBHOOK_NAME,
-            "embeds": [
-                initial_embed
-            ]
-        },
-        wait_for_message=True
-    )
-
-    if not question_message:
-        raise RuntimeError(
-            "Discord did not return "
-            "the QOTD message."
-        )
-
-    question_message_id = (
-        question_message["id"]
-    )
-
-    print(
-        f"QOTD message ID: "
-        f"{question_message_id}"
-    )
-
-    # Save current question
-    save_json(
-        CURRENT_FILE,
-        {
-            **question_data,
-            "message_id": (
-                question_message_id
-            ),
-            "duration_minutes": (
-                DURATION_MINUTES
-            )
-        }
-    )
-
-    # --------------------------------------------------------
-    # Start countdown
-    # --------------------------------------------------------
-
-    start_time = time.monotonic()
-
-    end_time = (
-        start_time
-        + COUNTDOWN_SECONDS
-    )
-
-    last_message_id = (
-        question_message_id
-    )
-
-    leaderboard = (
-        load_leaderboard()
-    )
-
-    already_awarded = set()
-
-    print(
-        "Countdown started."
-    )
-
-    print(
-        "The Discord message will "
-        "update every second."
-    )
-
-    # --------------------------------------------------------
-    # Countdown loop
-    # --------------------------------------------------------
-
-    while True:
-        current_time = (
-            time.monotonic()
-        )
-
-        remaining = max(
-            0,
-            int(
-                end_time
-                - current_time
-            )
-        )
-
-        minutes = (
-            remaining // 60
-        )
-
-        seconds = (
-            remaining % 60
-        )
-
-        timer = (
-            f"{minutes}:"
-            f"{seconds:02d}"
-        )
-
-        print(
-            f"Time remaining: {timer}"
-        )
-
-        # ----------------------------------------------------
-        # Update Discord countdown
-        # ----------------------------------------------------
-
-        edit_webhook_message(
-            question_message_id,
-            {
-                "embeds": [
-                    build_question_embed(
-                        question_data,
-                        remaining
-                    )
-                ]
-            }
-        )
-
-        # ----------------------------------------------------
-        # Check new Discord messages
-        # ----------------------------------------------------
-
-        messages = (
-            get_messages_after(
-                last_message_id
-            )
-        )
-
-        for message in messages:
-            last_message_id = (
-                message["id"]
-            )
-
-            author = message.get(
-                "author",
-                {}
-            )
-
-            # Ignore bot messages
-            if author.get("bot"):
-                continue
-
-            content = message.get(
-                "content",
-                ""
-            )
-
-            answer = parse_answer(
-                content
-            )
-
-            if not answer:
-                continue
-
-            correct_letter = (
-                letter_for_index(
-                    question_data[
-                        "correct_index"
-                    ]
-                )
-            )
-
-            if answer != correct_letter:
-                continue
-
-            user_id = str(
-                author["id"]
-            )
-
-            # Only one point per person
-            # for this question.
-            if user_id in (
-                already_awarded
-            ):
-                continue
-
-            already_awarded.add(
-                user_id
-            )
-
-            add_point(
-                leaderboard,
-                author
-            )
-
-            save_leaderboard(
-                leaderboard
-            )
-
-            username = (
-                author.get(
-                    "global_name"
-                )
-                or author.get(
-                    "username"
-                )
-                or "Unknown User"
-            )
-
-            print(
-                f"Correct answer from "
-                f"{username} "
-                f"({user_id})"
-            )
-
-            # Immediately announce
-            # that they earned a point.
-            send_bot_message(
-                content=(
-                    f"🎉 <@{user_id}> "
-                    f"got it correct! "
-                    f"**+1 point!**"
-                ),
-                allowed_users=[
-                    user_id
-                ]
-            )
-
-        # ----------------------------------------------------
-        # Check timer
-        # ----------------------------------------------------
-
-        if remaining <= 0:
-            break
-
-        # Wait one second
-        time.sleep(1)
-
-    # --------------------------------------------------------
-    # Force final 0:00 state
-    # --------------------------------------------------------
-
-    print(
-        "Countdown reached 0:00."
-    )
-
-    edit_webhook_message(
-        question_message_id,
-        {
-            "embeds": [
-                build_closed_embed(
-                    question_data
-                )
-            ]
-        }
-    )
-
-    # --------------------------------------------------------
-    # Reveal answer
-    # --------------------------------------------------------
-
-    print(
-        "Sending correct answer..."
-    )
-
-    send_bot_message(
-        embed=build_answer_embed(
-            question_data
-        )
-    )
-
-    # --------------------------------------------------------
-    # Announce winners
-    # --------------------------------------------------------
-
-    if already_awarded:
-        mentions = " ".join(
-            f"<@{user_id}>"
-            for user_id in (
-                already_awarded
-            )
-        )
-
-        send_bot_message(
-            content=(
-                "🏆 **Today's correct "
-                "answers:**\n"
-                f"{mentions}\n\n"
-                "Each correct user earned "
-                "**+1 point**."
-            ),
-            allowed_users=list(
-                already_awarded
-            )
-        )
-
-    else:
-        send_bot_message(
-            content=(
-                "😅 **Nobody got today's "
-                "question correct.**\n"
-                "Better luck next time!"
-            )
-        )
-
-    # --------------------------------------------------------
-    # Leaderboard
-    # --------------------------------------------------------
-
-    print(
-        "Sending leaderboard..."
-    )
-
-    send_bot_message(
-        embed={
-            "title": (
-                "🏆 QOTD Leaderboard"
-            ),
-
-            "description": (
-                leaderboard_text(
-                    leaderboard
-                )
-            ),
-
-            "color": 65413,
-
-            "footer": {
-                "text": (
-                    "Top 10 Question of "
-                    "the Day scores"
-                )
-            }
-        }
-    )
-
-    save_leaderboard(
-        leaderboard
-    )
-
-    print("=" * 60)
-    print("QOTD COMPLETED")
+    print()
+    print("QOTD completed successfully.")
     print("=" * 60)
 
-
-# ============================================================
-# START
-# ============================================================
 
 if __name__ == "__main__":
-    run_qotd()
+    main()
