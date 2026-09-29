@@ -1,22 +1,35 @@
 name: Daily Question of the Day
 
 on:
+  # Main daily QOTD
   schedule:
-    # 9:17 AM Philippines time every day
-    - cron: "17 9 * * *"
-      timezone: "Asia/Manila"
+    # 12:00 UTC every day
+    - cron: "0 12 * * *"
 
+    # 12:10 UTC every day
+    - cron: "10 12 * * *"
+
+  # Allows manual testing
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose what to test"
+        required: true
+        default: "question"
+        type: choice
+        options:
+          - question
+          - answer
 
 permissions:
   contents: write
 
 jobs:
-  send-qotd:
+  qotd:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -26,27 +39,41 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Send Question of the Day
+      - name: Determine QOTD mode
+        id: mode
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.schedule }}" == "10 12 * * *" ]]; then
+            echo "mode=answer" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=question" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run QOTD
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          QOTD_MODE: ${{ steps.mode.outputs.mode }}
         run: |
           python qotd.py
 
-      - name: Save used question database
+      - name: Save QOTD database
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add data/used_questions.json
+          git add data/
 
           if git diff --cached --quiet; then
             echo "No database changes to commit."
           else
-            git commit -m "Update QOTD question database"
+            git commit -m "Update QOTD database"
             git push
           fi
