@@ -3,7 +3,6 @@ import json
 import html
 import random
 import hashlib
-import time
 from pathlib import Path
 
 import requests
@@ -17,13 +16,17 @@ WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
 WEBHOOK_NAME = "Nickolas Lilly Assistant"
 
-ANSWER_DELAY_SECONDS = 10 * 60
-
 API_URL = "https://opentdb.com/api.php"
 
-USED_FILE = Path("data/used_questions.json")
+DATA_DIR = Path("data")
+CURRENT_QUESTION_FILE = DATA_DIR / "current_question.json"
+USED_QUESTIONS_FILE = DATA_DIR / "used_questions.json"
 
-# Random categories
+
+# ============================================================
+# TRIVIA CATEGORIES
+# ============================================================
+
 CATEGORIES = [
     9,   # General Knowledge
     10,  # Books
@@ -45,14 +48,10 @@ CATEGORIES = [
     28,  # Vehicles
     29,  # Comics
     30,  # Gadgets
-    31,  # Anime & Manga
+    31,  # Japanese Anime & Manga
     32,  # Cartoon & Animations
 ]
 
-
-# ============================================================
-# CATEGORY NAMES
-# ============================================================
 
 CATEGORY_NAMES = {
     9: "General Knowledge",
@@ -80,10 +79,6 @@ CATEGORY_NAMES = {
 }
 
 
-# ============================================================
-# DIFFICULTY
-# ============================================================
-
 DIFFICULTY_NAMES = {
     "easy": "Easy",
     "medium": "Medium",
@@ -92,36 +87,31 @@ DIFFICULTY_NAMES = {
 
 
 # ============================================================
-# LOAD USED QUESTIONS
+# FILE HELPERS
 # ============================================================
 
-def load_used_questions():
-    if not USED_FILE.exists():
-        return set()
+def ensure_data_directory():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_json(path, default):
+    if not path.exists():
+        return default
 
     try:
-        with USED_FILE.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-
-        if isinstance(data, list):
-            return set(data)
-
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
     except Exception as error:
-        print(f"Could not read used question database: {error}")
+        print(f"Could not read {path}: {error}")
+        return default
 
-    return set()
 
+def save_json(path, data):
+    ensure_data_directory()
 
-# ============================================================
-# SAVE USED QUESTIONS
-# ============================================================
-
-def save_used_questions(used_questions):
-    USED_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    with USED_FILE.open("w", encoding="utf-8") as file:
+    with path.open("w", encoding="utf-8") as file:
         json.dump(
-            sorted(used_questions),
+            data,
             file,
             indent=2,
             ensure_ascii=False,
@@ -129,11 +119,11 @@ def save_used_questions(used_questions):
 
 
 # ============================================================
-# CREATE QUESTION ID
+# QUESTION ID
 # ============================================================
 
-def question_id(question_text):
-    normalized = " ".join(question_text.lower().split())
+def create_question_id(question):
+    normalized = " ".join(question.lower().split())
 
     return hashlib.sha256(
         normalized.encode("utf-8")
@@ -144,11 +134,13 @@ def question_id(question_text):
 # GET RANDOM QUESTION
 # ============================================================
 
-def get_question():
-    used_questions = load_used_questions()
+def get_random_question():
+    used_questions = set(
+        load_json(USED_QUESTIONS_FILE, [])
+    )
 
-    # Try several times to find an unused question.
-    for attempt in range(5):
+    # Try several categories and batches.
+    for attempt in range(10):
         category = random.choice(CATEGORIES)
 
         params = {
@@ -168,10 +160,11 @@ def get_question():
         data = response.json()
 
         if data.get("response_code") != 0:
-            raise RuntimeError(
-                f"Open Trivia DB returned response code "
-                f"{data.get('response_code')}"
+            print(
+                "Open Trivia DB response code:",
+                data.get("response_code"),
             )
+            continue
 
         questions = data.get("results", [])
 
@@ -182,9 +175,11 @@ def get_question():
                 item["question"]
             )
 
-            qid = question_id(question_text)
+            question_id = create_question_id(
+                question_text
+            )
 
-            if qid in used_questions:
+            if question_id in used_questions:
                 continue
 
             correct_answer = html.unescape(
@@ -196,16 +191,14 @@ def get_question():
                 for answer in item["incorrect_answers"]
             ]
 
-            answers = incorrect_answers + [correct_answer]
+            answers = incorrect_answers + [
+                correct_answer
+            ]
 
             random.shuffle(answers)
 
-            used_questions.add(qid)
-
-            save_used_questions(used_questions)
-
-            return {
-                "id": qid,
+            question = {
+                "id": question_id,
                 "question": question_text,
                 "correct_answer": correct_answer,
                 "answers": answers,
@@ -214,21 +207,92 @@ def get_question():
                     "Trivia",
                 ),
                 "difficulty": DIFFICULTY_NAMES.get(
-                    item.get("difficulty", ""),
-                    item.get("difficulty", "Unknown").title(),
+                    item.get("difficulty"),
+                    "Unknown",
                 ),
             }
 
-    raise RuntimeError(
-        "Could not find an unused question."
+            used_questions.add(question_id)
+
+            save_json(
+                USED_QUESTIONS_FILE,
+                sorted(used_questions),
+            )
+
+            return question
+
+    # If the database eventually contains almost everything,
+    # allow a fresh question instead of completely failing.
+    print(
+        "Could not find an unused question. "
+        "Requesting a fresh random question."
     )
+
+    category = random.choice(CATEGORIES)
+
+    params = {
+        "amount": 1,
+        "category": category,
+        "type": "multiple",
+    }
+
+    response = requests.get(
+        API_URL,
+        params=params,
+        timeout=20,
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data.get("response_code") != 0:
+        raise RuntimeError(
+            "Open Trivia DB could not provide a question."
+        )
+
+    item = data["results"][0]
+
+    question_text = html.unescape(
+        item["question"]
+    )
+
+    correct_answer = html.unescape(
+        item["correct_answer"]
+    )
+
+    incorrect_answers = [
+        html.unescape(answer)
+        for answer in item["incorrect_answers"]
+    ]
+
+    answers = incorrect_answers + [
+        correct_answer
+    ]
+
+    random.shuffle(answers)
+
+    return {
+        "id": create_question_id(question_text),
+        "question": question_text,
+        "correct_answer": correct_answer,
+        "answers": answers,
+        "category": CATEGORY_NAMES.get(
+            category,
+            "Trivia",
+        ),
+        "difficulty": DIFFICULTY_NAMES.get(
+            item.get("difficulty"),
+            "Unknown",
+        ),
+    }
 
 
 # ============================================================
 # DISCORD WEBHOOK
 # ============================================================
 
-def webhook_request(method, url, **kwargs):
+def discord_request(method, url, **kwargs):
     response = requests.request(
         method,
         url,
@@ -238,7 +302,7 @@ def webhook_request(method, url, **kwargs):
 
     if response.status_code >= 400:
         print(
-            f"Discord returned HTTP {response.status_code}: "
+            f"Discord HTTP {response.status_code}: "
             f"{response.text}"
         )
 
@@ -247,48 +311,40 @@ def webhook_request(method, url, **kwargs):
     return response
 
 
-# ============================================================
-# RENAME WEBHOOK
-# ============================================================
-
 def rename_webhook():
-    payload = {
-        "name": WEBHOOK_NAME
-    }
-
     try:
-        webhook_request(
+        discord_request(
             "PATCH",
             WEBHOOK_URL,
-            json=payload,
+            json={
+                "name": WEBHOOK_NAME
+            },
         )
 
         print(
-            f"Webhook name updated to: {WEBHOOK_NAME}"
+            f"Webhook name set to: {WEBHOOK_NAME}"
         )
 
     except Exception as error:
-        # Do not stop the entire QOTD if renaming fails.
         print(
-            f"Could not rename webhook: {error}"
+            f"Webhook rename failed: {error}"
         )
 
 
 # ============================================================
-# FORMAT ANSWERS
+# ANSWER FORMAT
 # ============================================================
 
 def format_answers(answers):
     letters = ["A", "B", "C", "D"]
 
-    lines = []
-
-    for letter, answer in zip(letters, answers):
-        lines.append(
-            f"**{letter}.** {answer}"
+    return "\n".join(
+        f"**{letter}.** {answer}"
+        for letter, answer in zip(
+            letters,
+            answers,
         )
-
-    return "\n".join(lines)
+    )
 
 
 # ============================================================
@@ -296,17 +352,14 @@ def format_answers(answers):
 # ============================================================
 
 def send_question(question):
-    description = (
-        f"## 🧠 Question of the Day\n\n"
-        f"**{question['question']}**\n\n"
-        f"{format_answers(question['answers'])}\n\n"
-        "💬 **What do you think the answer is?**\n"
-        "You have **10 minutes** to answer!"
-    )
-
     embed = {
         "title": "🧠 Question of the Day",
-        "description": description,
+        "description": (
+            f"**{question['question']}**\n\n"
+            f"{format_answers(question['answers'])}\n\n"
+            "💬 **What do you think the answer is?**\n"
+            "You have **10 minutes** to answer!"
+        ),
         "color": 65413,
         "fields": [
             {
@@ -321,7 +374,10 @@ def send_question(question):
             },
         ],
         "footer": {
-            "text": "Nickolas Lilly Assistant • Daily QOTD"
+            "text": (
+                "Nickolas Lilly Assistant • "
+                "Daily QOTD • Answer in 10 minutes"
+            )
         },
     }
 
@@ -333,13 +389,13 @@ def send_question(question):
         },
     }
 
-    webhook_request(
+    discord_request(
         "POST",
         WEBHOOK_URL,
         json=payload,
     )
 
-    print("Question successfully sent.")
+    print("Question sent successfully.")
 
 
 # ============================================================
@@ -347,13 +403,12 @@ def send_question(question):
 # ============================================================
 
 def send_answer(question):
-    answer_embed = {
-        "title": "💡 The Answer",
+    embed = {
+        "title": "💡 Question of the Day Answer",
         "description": (
-            f"The correct answer was:\n\n"
+            "The 10-minute answer period is over!\n\n"
             f"## ✅ {question['correct_answer']}\n\n"
-            "Thanks for participating in today's "
-            "Question of the Day!"
+            "Thanks to everyone who participated! 🎉"
         ),
         "color": 5763719,
         "fields": [
@@ -369,25 +424,92 @@ def send_answer(question):
             },
         ],
         "footer": {
-            "text": "Nickolas Lilly Assistant • Answer Reveal"
+            "text": (
+                "Nickolas Lilly Assistant • "
+                "Answer Reveal"
+            )
         },
     }
 
     payload = {
         "username": WEBHOOK_NAME,
-        "embeds": [answer_embed],
+        "embeds": [embed],
         "allowed_mentions": {
             "parse": [],
         },
     }
 
-    webhook_request(
+    discord_request(
         "POST",
         WEBHOOK_URL,
         json=payload,
     )
 
-    print("Correct answer successfully sent.")
+    print("Answer sent successfully.")
+
+
+# ============================================================
+# QUESTION JOB
+# ============================================================
+
+def question_job():
+    print(
+        "Starting Question of the Day..."
+    )
+
+    rename_webhook()
+
+    question = get_random_question()
+
+    print()
+    print("Question:", question["question"])
+    print("Answer:", question["correct_answer"])
+    print("Category:", question["category"])
+    print("Difficulty:", question["difficulty"])
+
+    save_json(
+        CURRENT_QUESTION_FILE,
+        question,
+    )
+
+    send_question(question)
+
+    print(
+        "Question saved for the answer-reveal job."
+    )
+
+
+# ============================================================
+# ANSWER JOB
+# ============================================================
+
+def answer_job():
+    print(
+        "Starting Question of the Day answer reveal..."
+    )
+
+    if not CURRENT_QUESTION_FILE.exists():
+        raise RuntimeError(
+            "No current question was found."
+        )
+
+    question = load_json(
+        CURRENT_QUESTION_FILE,
+        None,
+    )
+
+    if not question:
+        raise RuntimeError(
+            "Current question file is empty."
+        )
+
+    rename_webhook()
+
+    send_answer(question)
+
+    print(
+        "Answer reveal completed successfully."
+    )
 
 
 # ============================================================
@@ -395,39 +517,21 @@ def send_answer(question):
 # ============================================================
 
 def main():
-    print("Starting Nickolas Lilly Assistant QOTD...")
-
-    # Keep the actual Discord webhook name updated.
-    rename_webhook()
-
-    # Get a new question.
-    question = get_question()
-
-    print()
-    print("Question:")
-    print(question["question"])
-
-    print()
-    print("Correct answer:")
-    print(question["correct_answer"])
-
-    print()
-    print(
-        f"Waiting {ANSWER_DELAY_SECONDS // 60} minutes "
-        "before revealing the answer..."
+    mode = os.environ.get(
+        "QOTD_MODE",
+        "question",
     )
 
-    # Send the question first.
-    send_question(question)
+    if mode == "question":
+        question_job()
 
-    # Wait 10 minutes.
-    time.sleep(ANSWER_DELAY_SECONDS)
+    elif mode == "answer":
+        answer_job()
 
-    # Reveal the answer.
-    send_answer(question)
-
-    print()
-    print("QOTD completed successfully.")
+    else:
+        raise ValueError(
+            f"Unknown QOTD_MODE: {mode}"
+        )
 
 
 if __name__ == "__main__":
