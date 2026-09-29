@@ -6,7 +6,6 @@ import hashlib
 import re
 import time
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
 
 import requests
 
@@ -24,8 +23,15 @@ WEBHOOK_NAME = "Nickolas Lilly Assistant"
 API_URL = "https://opentdb.com/api.php"
 DISCORD_API = "https://discord.com/api/v10"
 
-COUNTDOWN_SECONDS = 10 * 60
-POLL_INTERVAL = 10
+# This now comes from GitHub Actions
+DURATION_MINUTES = int(os.environ.get("QOTD_DURATION", "10"))
+COUNTDOWN_SECONDS = DURATION_MINUTES * 60
+
+# Check Discord messages every 5 seconds
+POLL_INTERVAL = 5
+
+# Update the visible countdown every 10 seconds
+COUNTDOWN_UPDATE_INTERVAL = 10
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -35,7 +41,6 @@ USED_FILE = DATA_DIR / "used_questions.json"
 LEADERBOARD_FILE = DATA_DIR / "leaderboard.json"
 
 
-# Broad selection of Open Trivia DB categories
 CATEGORIES = [
     9,   # General Knowledge
     10,  # Books
@@ -83,7 +88,7 @@ def save_json(path, data):
 
 
 # ============================================================
-# DISCORD
+# DISCORD API
 # ============================================================
 
 def bot_headers():
@@ -107,6 +112,7 @@ def rename_webhook():
                 response.status_code,
                 response.text,
             )
+
     except Exception as e:
         print("Webhook rename error:", e)
 
@@ -126,7 +132,8 @@ def send_webhook(payload, wait_for_message=False):
 
     if response.status_code not in (200, 204):
         raise RuntimeError(
-            f"Discord webhook error {response.status_code}: {response.text}"
+            f"Discord webhook error "
+            f"{response.status_code}: {response.text}"
         )
 
     if wait_for_message and response.text:
@@ -135,7 +142,28 @@ def send_webhook(payload, wait_for_message=False):
     return None
 
 
-def send_bot_message(content=None, embed=None, allowed_users=None):
+def edit_webhook_message(message_id, payload):
+    response = requests.patch(
+        f"{WEBHOOK_URL}/messages/{message_id}",
+        json=payload,
+        timeout=30,
+    )
+
+    if response.status_code not in (200, 204):
+        print(
+            "Webhook message edit failed:",
+            response.status_code,
+            response.text,
+        )
+
+    return response
+
+
+def send_bot_message(
+    content=None,
+    embed=None,
+    allowed_users=None,
+):
     payload = {}
 
     if content:
@@ -188,23 +216,6 @@ def get_messages_after(message_id):
     return response.json()
 
 
-def edit_webhook_message(message_id, payload):
-    url = f"{WEBHOOK_URL}/messages/{message_id}"
-
-    response = requests.patch(
-        url,
-        json=payload,
-        timeout=30,
-    )
-
-    if response.status_code not in (200, 204):
-        print(
-            "Webhook message edit failed:",
-            response.status_code,
-            response.text,
-        )
-
-
 # ============================================================
 # QUESTION SYSTEM
 # ============================================================
@@ -218,7 +229,7 @@ def question_hash(question):
 def get_random_question():
     used_questions = load_json(USED_FILE, [])
 
-    for attempt in range(10):
+    for _ in range(10):
         category = random.choice(CATEGORIES)
 
         response = requests.get(
@@ -243,13 +254,14 @@ def get_random_question():
 
         for item in questions:
             question = html.unescape(item["question"])
-
             q_hash = question_hash(question)
 
             if q_hash in used_questions:
                 continue
 
-            correct = html.unescape(item["correct_answer"])
+            correct = html.unescape(
+                item["correct_answer"]
+            )
 
             incorrect = [
                 html.unescape(answer)
@@ -263,22 +275,28 @@ def get_random_question():
 
             used_questions.append(q_hash)
 
-            # Keep database reasonably sized
             if len(used_questions) > 5000:
                 used_questions = used_questions[-5000:]
 
-            save_json(USED_FILE, used_questions)
+            save_json(
+                USED_FILE,
+                used_questions,
+            )
 
             return {
                 "question": question,
                 "answers": answers,
                 "correct_index": correct_index,
-                "category": html.unescape(item["category"]),
+                "category": html.unescape(
+                    item["category"]
+                ),
                 "difficulty": item["difficulty"].capitalize(),
                 "hash": q_hash,
             }
 
-    raise RuntimeError("Could not find a new question.")
+    raise RuntimeError(
+        "Could not find a new question."
+    )
 
 
 def letter_for_index(index):
@@ -291,13 +309,6 @@ def letter_for_index(index):
 
 def parse_answer(content):
     text = content.strip()
-
-    # Accept:
-    # A
-    # A.
-    # A)
-    # Answer A
-    # Answer: A
 
     match = re.fullmatch(
         r"(?:answer\s*[:\-]?\s*)?([ABCD])[\.\)]?",
@@ -316,11 +327,17 @@ def parse_answer(content):
 # ============================================================
 
 def load_leaderboard():
-    return load_json(LEADERBOARD_FILE, {})
+    return load_json(
+        LEADERBOARD_FILE,
+        {},
+    )
 
 
 def save_leaderboard(board):
-    save_json(LEADERBOARD_FILE, board)
+    save_json(
+        LEADERBOARD_FILE,
+        board,
+    )
 
 
 def add_point(board, user):
@@ -328,9 +345,11 @@ def add_point(board, user):
 
     if user_id not in board:
         board[user_id] = {
-            "username": user.get("global_name")
-            or user.get("username")
-            or "Unknown User",
+            "username": (
+                user.get("global_name")
+                or user.get("username")
+                or "Unknown User"
+            ),
             "points": 0,
         }
 
@@ -359,35 +378,45 @@ def leaderboard_text(board):
         sorted_users[:10],
         start=1,
     ):
+        points = data["points"]
+
         lines.append(
             f"**{position}.** <@{user_id}> • "
-            f"**{data['points']} point"
-            f"{'s' if data['points'] != 1 else ''}**"
+            f"**{points} point"
+            f"{'s' if points != 1 else ''}**"
         )
 
     return "\n".join(lines)
 
 
 # ============================================================
-# QOTD
+# EMBEDS
 # ============================================================
 
-def create_question_embed(question_data, countdown_timestamp):
-    answers = question_data["answers"]
+def build_question_embed(
+    question_data,
+    remaining_seconds,
+):
+    minutes = remaining_seconds // 60
+    seconds = remaining_seconds % 60
 
-    choices = "\n".join(
+    timer = f"{minutes:02d}:{seconds:02d}"
+
+    answers = "\n".join(
         f"**{letter_for_index(i)}.** {answer}"
-        for i, answer in enumerate(answers)
+        for i, answer in enumerate(
+            question_data["answers"]
+        )
     )
 
     return {
         "title": "🧠 Question of the Day",
         "description": (
             f"**{question_data['question']}**\n\n"
-            f"{choices}\n\n"
-            "⏱️ **Time remaining:** "
-            f"<t:{countdown_timestamp}:R>\n\n"
-            "Reply with **A, B, C, or D** to submit your answer."
+            f"{answers}\n\n"
+            f"⏱️ **Time remaining: {timer}**\n\n"
+            "Reply with **A, B, C, or D** to submit "
+            "your answer."
         ),
         "color": 65413,
         "fields": [
@@ -403,12 +432,53 @@ def create_question_embed(question_data, countdown_timestamp):
             },
         ],
         "footer": {
-            "text": "Nickolas Lilly Assistant • Question of the Day"
+            "text": (
+                "Nickolas Lilly Assistant • "
+                "Question of the Day"
+            )
         },
     }
 
 
-def create_answer_embed(question_data):
+def build_closed_embed(question_data):
+    answers = "\n".join(
+        f"**{letter_for_index(i)}.** {answer}"
+        for i, answer in enumerate(
+            question_data["answers"]
+        )
+    )
+
+    return {
+        "title": "🧠 Question of the Day",
+        "description": (
+            f"**{question_data['question']}**\n\n"
+            f"{answers}\n\n"
+            "⏱️ **Time remaining: 00:00**\n\n"
+            "🔒 **Answers are now closed.**"
+        ),
+        "color": 65413,
+        "fields": [
+            {
+                "name": "📚 Category",
+                "value": question_data["category"],
+                "inline": True,
+            },
+            {
+                "name": "🎯 Difficulty",
+                "value": question_data["difficulty"],
+                "inline": True,
+            },
+        ],
+        "footer": {
+            "text": (
+                "Nickolas Lilly Assistant • "
+                "Question of the Day"
+            )
+        },
+    }
+
+
+def build_answer_embed(question_data):
     correct = question_data["answers"][
         question_data["correct_index"]
     ]
@@ -420,7 +490,7 @@ def create_answer_embed(question_data):
     return {
         "title": "💡 Question of the Day Answer",
         "description": (
-            f"The correct answer was:\n\n"
+            "The correct answer was:\n\n"
             f"**{letter}. {correct}**"
         ),
         "color": 5763719,
@@ -431,41 +501,30 @@ def create_answer_embed(question_data):
 
 
 # ============================================================
-# MAIN QOTD PROCESS
+# MAIN QOTD
 # ============================================================
 
 def run_qotd():
-    print("Starting Question of the Day...")
+    print(
+        f"Starting QOTD with a "
+        f"{DURATION_MINUTES}-minute countdown."
+    )
 
     rename_webhook()
 
     question_data = get_random_question()
 
-    now = datetime.now(timezone.utc)
-    end_time = now + timedelta(seconds=COUNTDOWN_SECONDS)
-
-    countdown_timestamp = int(end_time.timestamp())
-
-    # Save current question
-    current = {
-        **question_data,
-        "started_at": now.isoformat(),
-        "ends_at": end_time.isoformat(),
-    }
-
-    save_json(CURRENT_FILE, current)
-
     # --------------------------------------------------------
-    # Send question
+    # Post question
     # --------------------------------------------------------
 
     question_message = send_webhook(
         {
             "username": WEBHOOK_NAME,
             "embeds": [
-                create_question_embed(
+                build_question_embed(
                     question_data,
-                    countdown_timestamp,
+                    COUNTDOWN_SECONDS,
                 )
             ],
         },
@@ -479,36 +538,93 @@ def run_qotd():
 
     question_message_id = question_message["id"]
 
-    current["message_id"] = question_message_id
-    save_json(CURRENT_FILE, current)
+    # Save current question
+    save_json(
+        CURRENT_FILE,
+        {
+            **question_data,
+            "message_id": question_message_id,
+            "duration_minutes": DURATION_MINUTES,
+        },
+    )
 
     print(
-        f"Question posted. Message ID: {question_message_id}"
+        f"Question posted: {question_message_id}"
     )
 
     # --------------------------------------------------------
-    # Monitor answers for 10 minutes
+    # Start countdown
     # --------------------------------------------------------
+
+    start_time = time.monotonic()
+    end_time = start_time + COUNTDOWN_SECONDS
+
+    last_message_id = question_message_id
 
     leaderboard = load_leaderboard()
 
     already_awarded = set()
 
-    last_message_id = question_message_id
+    last_countdown_update = 0
 
-    end_timestamp = time.time() + COUNTDOWN_SECONDS
+    print(
+        f"Countdown started for "
+        f"{DURATION_MINUTES} minute(s)."
+    )
 
-    print("Monitoring answers for 10 minutes...")
+    while True:
+        now = time.monotonic()
 
-    while time.time() < end_timestamp:
+        remaining = max(
+            0,
+            int(end_time - now)
+        )
 
-        messages = get_messages_after(last_message_id)
+        # ----------------------------------------------------
+        # Update visible countdown
+        # ----------------------------------------------------
 
-        # Discord returns oldest first when using "after"
+        if (
+            last_countdown_update == 0
+            or now - last_countdown_update
+            >= COUNTDOWN_UPDATE_INTERVAL
+            or remaining <= 0
+        ):
+            print(
+                f"Updating countdown: "
+                f"{remaining // 60:02d}:"
+                f"{remaining % 60:02d}"
+            )
+
+            edit_webhook_message(
+                question_message_id,
+                {
+                    "embeds": [
+                        build_question_embed(
+                            question_data,
+                            remaining,
+                        )
+                    ]
+                },
+            )
+
+            last_countdown_update = now
+
+        # ----------------------------------------------------
+        # Check Discord answers
+        # ----------------------------------------------------
+
+        messages = get_messages_after(
+            last_message_id
+        )
+
         for message in messages:
             last_message_id = message["id"]
 
-            author = message.get("author", {})
+            author = message.get(
+                "author",
+                {},
+            )
 
             # Ignore bots
             if author.get("bot"):
@@ -530,7 +646,7 @@ def run_qotd():
 
             user_id = str(author["id"])
 
-            # One point per user for this QOTD
+            # Only one point per user
             if user_id in already_awarded:
                 continue
 
@@ -541,15 +657,16 @@ def run_qotd():
                 author,
             )
 
-            print(
-                f"Correct answer from "
-                f"{author.get('username')} ({user_id})"
+            save_leaderboard(
+                leaderboard
             )
 
-            # Save immediately in case something fails later
-            save_leaderboard(leaderboard)
+            print(
+                f"Correct answer: "
+                f"{author.get('username')} "
+                f"({user_id})"
+            )
 
-            # Mention the winner
             send_bot_message(
                 content=(
                     f"🎉 <@{user_id}> got it correct! "
@@ -558,52 +675,34 @@ def run_qotd():
                 allowed_users=[user_id],
             )
 
-        remaining = max(
-            0,
-            int(end_timestamp - time.time())
-        )
-
-        print(
-            f"Time remaining: "
-            f"{remaining // 60:02d}:{remaining % 60:02d}"
-        )
+        # ----------------------------------------------------
+        # Countdown finished
+        # ----------------------------------------------------
 
         if remaining <= 0:
             break
 
         time.sleep(
-            min(POLL_INTERVAL, remaining)
-        )
-
-    # --------------------------------------------------------
-    # Countdown finished
-    # --------------------------------------------------------
-
-    print("10 minutes are over.")
-
-    # Edit the original question to show 00:00
-    final_embed = create_question_embed(
-        question_data,
-        int(time.time()),
-    )
-
-    final_embed["description"] = (
-        f"**{question_data['question']}**\n\n"
-        + "\n".join(
-            f"**{letter_for_index(i)}.** {answer}"
-            for i, answer in enumerate(
-                question_data["answers"]
+            min(
+                POLL_INTERVAL,
+                remaining,
             )
         )
-        + "\n\n"
-        "⏱️ **Time remaining: 00:00**\n\n"
-        "🔒 **Answers are now closed.**"
-    )
+
+    # --------------------------------------------------------
+    # Force final 00:00 message
+    # --------------------------------------------------------
+
+    print("Countdown reached 00:00.")
 
     edit_webhook_message(
         question_message_id,
         {
-            "embeds": [final_embed]
+            "embeds": [
+                build_closed_embed(
+                    question_data
+                )
+            ]
         },
     )
 
@@ -611,50 +710,68 @@ def run_qotd():
     # Reveal answer
     # --------------------------------------------------------
 
+    print("Sending correct answer...")
+
     send_bot_message(
-        embed=create_answer_embed(question_data)
+        embed=build_answer_embed(
+            question_data
+        )
     )
 
     # --------------------------------------------------------
-    # Leaderboard
+    # Winners
     # --------------------------------------------------------
 
     if already_awarded:
-        winners = " ".join(
+        mentions = " ".join(
             f"<@{user_id}>"
             for user_id in already_awarded
         )
 
         send_bot_message(
             content=(
-                f"🏆 **Today's correct answers:**\n"
-                f"{winners}\n\n"
-                f"Each correct user earned **+1 point**."
+                "🏆 **Today's correct answers:**\n"
+                f"{mentions}\n\n"
+                "Each correct user earned "
+                "**+1 point**."
             ),
-            allowed_users=list(already_awarded),
+            allowed_users=list(
+                already_awarded
+            ),
         )
     else:
         send_bot_message(
             content=(
-                "😅 **Nobody got today's question correct.**\n"
-                "Better luck on the next Question of the Day!"
+                "😅 **Nobody got today's question "
+                "correct.**\n"
+                "Better luck next time!"
             )
         )
+
+    # --------------------------------------------------------
+    # Leaderboard
+    # --------------------------------------------------------
 
     send_bot_message(
         embed={
             "title": "🏆 QOTD Leaderboard",
-            "description": leaderboard_text(leaderboard),
+            "description": leaderboard_text(
+                leaderboard
+            ),
             "color": 65413,
             "footer": {
-                "text": "Top 10 Question of the Day scores"
+                "text": (
+                    "Top 10 Question of the Day scores"
+                )
             },
         }
     )
 
-    save_leaderboard(leaderboard)
+    save_leaderboard(
+        leaderboard
+    )
 
-    print("QOTD finished successfully.")
+    print("QOTD completed successfully.")
 
 
 if __name__ == "__main__":
