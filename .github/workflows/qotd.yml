@@ -1,15 +1,15 @@
-name: Daily Question of the Day
+name: Question of the Day
 
 on:
   schedule:
-    - cron: "0 12 * * *"
+    - cron: '0 12 * * *'
 
   workflow_dispatch:
     inputs:
       duration:
-        description: "How many minutes should the QOTD last?"
+        description: 'QOTD countdown duration in minutes'
         required: true
-        default: "10"
+        default: '10'
         type: string
 
 permissions:
@@ -19,10 +19,8 @@ jobs:
   qotd:
     runs-on: ubuntu-latest
 
-    timeout-minutes: 30
-
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -30,30 +28,41 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: '3.x'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install requests
 
-      - name: Set QOTD duration
+      - name: Determine QOTD duration
         shell: bash
         env:
-          MANUAL_DURATION: ${{ inputs.duration }}
           EVENT_NAME: ${{ github.event_name }}
+          MANUAL_DURATION: ${{ inputs.duration }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "QOTD_DURATION=$MANUAL_DURATION" >> "$GITHUB_ENV"
-            echo "Manual QOTD duration: $MANUAL_DURATION minutes"
+            DURATION="$MANUAL_DURATION"
+
+            echo "Manual duration selected: $DURATION minutes"
+
+            echo "$DURATION" > qotd_duration.txt
+
           else
-            echo "QOTD_DURATION=10" >> "$GITHUB_ENV"
-            echo "Scheduled QOTD duration: 10 minutes"
+            if [ -f qotd_duration.txt ]; then
+              DURATION=$(cat qotd_duration.txt)
+
+              echo "Using previously saved duration: $DURATION minutes"
+            else
+              DURATION="10"
+
+              echo "No saved duration found."
+              echo "Using default: $DURATION minutes"
+
+              echo "$DURATION" > qotd_duration.txt
+            fi
           fi
 
-      - name: Show duration
-        run: |
-          echo "QOTD_DURATION=$QOTD_DURATION"
+          echo "QOTD_DURATION=$DURATION" >> "$GITHUB_ENV"
 
       - name: Run Question of the Day
         env:
@@ -64,17 +73,21 @@ jobs:
         run: |
           python qotd.py
 
-      - name: Save QOTD database
+      - name: Save duration for future QOTDs
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add data/
+            git add qotd_duration.txt
 
-          if git diff --cached --quiet; then
-            echo "No database changes to commit."
-          else
-            git commit -m "Update QOTD database"
-            git push
+            if git diff --cached --quiet; then
+              echo "Duration did not change."
+            else
+              git commit -m "Update QOTD duration"
+              git push
+            fi
           fi
