@@ -23,7 +23,18 @@ MAX_HISTORY = 500
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 # Maximum Gemini attempts for one QOTD
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 4
+
+# Gemini connection/read timeout.
+#
+# 15 seconds = connection timeout
+# 90 seconds = maximum time waiting for Gemini
+#
+# This prevents the previous 30-second ReadTimeout problem.
+GEMINI_TIMEOUT = (15, 90)
+
+# Discord timeout
+DISCORD_TIMEOUT = (10, 30)
 
 
 # =========================
@@ -56,7 +67,12 @@ def load_history():
         return []
 
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as file:
+        with open(
+            HISTORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
             data = json.load(file)
 
         if not isinstance(data, list):
@@ -68,7 +84,11 @@ def load_history():
 
             # New format
             if isinstance(item, dict):
-                question = item.get("question", "").strip()
+
+                question = item.get(
+                    "question",
+                    ""
+                ).strip()
 
                 if question:
                     converted.append({
@@ -85,6 +105,7 @@ def load_history():
 
             # Old format
             elif isinstance(item, str):
+
                 question = item.strip()
 
                 if question:
@@ -94,17 +115,36 @@ def load_history():
                         "date": "unknown"
                     })
 
-        return converted
+        return converted[-MAX_HISTORY:]
 
-    except (json.JSONDecodeError, OSError):
-        print("Could not read question history. Starting with empty history.")
+    except (
+        json.JSONDecodeError,
+        OSError
+    ):
+
+        print(
+            "Could not read question history. "
+            "Starting with empty history."
+        )
+
         return []
 
 
 def save_history(history):
-    os.makedirs("data", exist_ok=True)
 
-    with open(HISTORY_FILE, "w", encoding="utf-8") as file:
+    os.makedirs(
+        "data",
+        exist_ok=True
+    )
+
+    history = history[-MAX_HISTORY:]
+
+    with open(
+        HISTORY_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
         json.dump(
             history,
             file,
@@ -126,21 +166,36 @@ def generate_question(previous_questions):
     for item in recent_questions:
 
         if isinstance(item, dict):
-            question = item.get("question", "")
+
+            question = item.get(
+                "question",
+                ""
+            )
 
         elif isinstance(item, str):
+
             question = item
 
         else:
+
             question = ""
 
         if question:
-            recent_text.append(f"- {question}")
+            recent_text.append(
+                f"- {question}"
+            )
 
     if recent_text:
-        history_text = "\n".join(recent_text)
+
+        history_text = "\n".join(
+            recent_text
+        )
+
     else:
-        history_text = "(No previous questions.)"
+
+        history_text = (
+            "(No previous questions.)"
+        )
 
     prompt = f"""
 Generate ONE original Question of the Day for a friendly creative Discord community.
@@ -213,7 +268,8 @@ Avoid repeating or closely rephrasing these previous questions:
 """
 
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models/"
         f"{GEMINI_MODEL}:generateContent"
     )
 
@@ -233,126 +289,427 @@ Avoid repeating or closely rephrasing these previous questions:
         }
     }
 
-    response = requests.post(
-        url,
-        params={
-            "key": GEMINI_API_KEY
-        },
-        json=payload,
-        timeout=30
-    )
+    last_error = None
 
-    # =========================
-    # RATE LIMIT
-    # =========================
+    # ========================================================
+    # GEMINI RETRY LOOP
+    # ========================================================
 
-    if response.status_code == 429:
+    for attempt in range(
+        1,
+        MAX_ATTEMPTS + 1
+    ):
 
-        print("Gemini API quota/rate limit reached.")
+        print(
+            f"Gemini request "
+            f"attempt {attempt}/{MAX_ATTEMPTS}..."
+        )
 
         try:
-            error_data = response.json()
-            print(json.dumps(
-                error_data,
-                indent=2
-            ))
-        except Exception:
-            print(response.text)
 
-        raise RuntimeError(
-            "Gemini API quota was exceeded. "
-            "Please wait for the quota to reset."
-        )
-
-    # =========================
-    # OTHER API ERRORS
-    # =========================
-
-    if response.status_code != 200:
-
-        print("Gemini API response:")
-        print(response.text)
-
-        response.raise_for_status()
-
-    data = response.json()
-
-    try:
-        candidates = data["candidates"]
-
-        if not candidates:
-            raise RuntimeError(
-                "Gemini returned no candidates."
+            response = requests.post(
+                url,
+                params={
+                    "key": GEMINI_API_KEY
+                },
+                json=payload,
+                timeout=GEMINI_TIMEOUT
             )
 
-        parts = candidates[0]["content"]["parts"]
+            # =================================================
+            # RATE LIMIT / QUOTA
+            # =================================================
 
-        if not parts:
-            raise RuntimeError(
-                "Gemini returned no content."
+            if response.status_code == 429:
+
+                print(
+                    "Gemini API returned HTTP 429."
+                )
+
+                try:
+
+                    error_data = response.json()
+
+                    print(
+                        json.dumps(
+                            error_data,
+                            indent=2
+                        )
+                    )
+
+                except Exception:
+
+                    print(
+                        response.text
+                    )
+
+                last_error = RuntimeError(
+                    "Gemini API quota/rate limit."
+                )
+
+                if attempt < MAX_ATTEMPTS:
+
+                    wait_time = (
+                        5 * attempt
+                    )
+
+                    print(
+                        f"Waiting {wait_time} "
+                        "seconds before retrying..."
+                    )
+
+                    time.sleep(
+                        wait_time
+                    )
+
+                    continue
+
+                raise last_error
+
+            # =================================================
+            # TEMPORARY GOOGLE SERVER ERRORS
+            # =================================================
+
+            if response.status_code in (
+                500,
+                502,
+                503,
+                504
+            ):
+
+                print(
+                    "Gemini temporary server error: "
+                    f"HTTP {response.status_code}"
+                )
+
+                last_error = RuntimeError(
+                    "Gemini temporary server error: "
+                    f"{response.status_code}"
+                )
+
+                if attempt < MAX_ATTEMPTS:
+
+                    wait_time = (
+                        5 * attempt
+                    )
+
+                    print(
+                        f"Waiting {wait_time} "
+                        "seconds before retrying..."
+                    )
+
+                    time.sleep(
+                        wait_time
+                    )
+
+                    continue
+
+                raise last_error
+
+            # =================================================
+            # OTHER API ERRORS
+            # =================================================
+
+            if response.status_code != 200:
+
+                print(
+                    "Gemini API response:"
+                )
+
+                print(
+                    response.text
+                )
+
+                response.raise_for_status()
+
+            # =================================================
+            # PARSE RESPONSE
+            # =================================================
+
+            data = response.json()
+
+            try:
+
+                candidates = data[
+                    "candidates"
+                ]
+
+                if not candidates:
+
+                    raise RuntimeError(
+                        "Gemini returned no candidates."
+                    )
+
+                parts = candidates[0][
+                    "content"
+                ][
+                    "parts"
+                ]
+
+                if not parts:
+
+                    raise RuntimeError(
+                        "Gemini returned no content."
+                    )
+
+                question = parts[0][
+                    "text"
+                ]
+
+            except (
+                KeyError,
+                IndexError,
+                TypeError
+            ):
+
+                print(
+                    "Unexpected Gemini response:"
+                )
+
+                print(
+                    json.dumps(
+                        data,
+                        indent=2
+                    )
+                )
+
+                raise RuntimeError(
+                    "Gemini returned an invalid response."
+                )
+
+            # =================================================
+            # CLEAN QUESTION
+            # =================================================
+
+            question = question.strip()
+
+            # Remove accidental quotation marks.
+            question = question.strip('"')
+            question = question.strip("'")
+            question = question.strip()
+
+            # Remove accidental markdown code blocks.
+            question = question.replace(
+                "```",
+                ""
+            ).strip()
+
+            # Remove accidental "Question:" prefix.
+            if question.lower().startswith(
+                "question:"
+            ):
+
+                question = question[
+                    9:
+                ].strip()
+
+            print(
+                f"Gemini generated: {question}"
             )
 
-        question = parts[0]["text"]
+            return question
 
-    except (KeyError, IndexError, TypeError):
-        print("Unexpected Gemini response:")
-        print(json.dumps(
-            data,
-            indent=2
-        ))
+        # =====================================================
+        # TIMEOUT
+        # =====================================================
 
-        raise RuntimeError(
-            "Gemini returned an invalid response."
-        )
+        except requests.exceptions.Timeout as error:
 
-    question = question.strip()
+            last_error = error
 
-    # Remove accidental quotation marks.
-    question = question.strip('"')
-    question = question.strip("'")
-    question = question.strip()
+            print(
+                "Gemini request timed out."
+            )
 
-    # Remove accidental markdown code blocks.
-    question = question.replace("```", "").strip()
+            print(
+                f"Details: {error}"
+            )
 
-    # Remove accidental "Question:" prefix.
-    if question.lower().startswith("question:"):
-        question = question[9:].strip()
+            if attempt < MAX_ATTEMPTS:
 
-    return question
+                wait_time = (
+                    3 * attempt
+                )
+
+                print(
+                    f"Waiting {wait_time} "
+                    "seconds before retrying..."
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+                continue
+
+            break
+
+        # =====================================================
+        # CONNECTION ERROR
+        # =====================================================
+
+        except requests.exceptions.ConnectionError as error:
+
+            last_error = error
+
+            print(
+                "Gemini connection error."
+            )
+
+            print(
+                f"Details: {error}"
+            )
+
+            if attempt < MAX_ATTEMPTS:
+
+                wait_time = (
+                    3 * attempt
+                )
+
+                print(
+                    f"Waiting {wait_time} "
+                    "seconds before retrying..."
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+                continue
+
+            break
+
+        # =====================================================
+        # REQUEST ERROR
+        # =====================================================
+
+        except requests.exceptions.RequestException as error:
+
+            last_error = error
+
+            print(
+                "Gemini request error."
+            )
+
+            print(
+                f"Details: {error}"
+            )
+
+            if attempt < MAX_ATTEMPTS:
+
+                wait_time = (
+                    3 * attempt
+                )
+
+                print(
+                    f"Waiting {wait_time} "
+                    "seconds before retrying..."
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+                continue
+
+            break
+
+        # =====================================================
+        # OTHER GENERATION ERRORS
+        # =====================================================
+
+        except RuntimeError as error:
+
+            last_error = error
+
+            print(
+                f"Generation error: {error}"
+            )
+
+            if attempt < MAX_ATTEMPTS:
+
+                wait_time = (
+                    3 * attempt
+                )
+
+                print(
+                    f"Waiting {wait_time} "
+                    "seconds before retrying..."
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+                continue
+
+            break
+
+    raise RuntimeError(
+        "Gemini failed after "
+        f"{MAX_ATTEMPTS} attempts. "
+        f"Last error: {last_error}"
+    )
 
 
 # =========================
 # VALIDATE QUESTION
 # =========================
 
-def is_valid_question(question, history):
+def is_valid_question(
+    question,
+    history
+):
 
     if not question:
-        print("Rejected: empty question.")
+
+        print(
+            "Rejected: empty question."
+        )
+
         return False
 
-    # Prevent tiny incomplete responses such as "If"
+    # Prevent tiny incomplete responses.
     if len(question) < 15:
-        print("Rejected: question is too short.")
+
+        print(
+            "Rejected: question is too short."
+        )
+
         return False
 
     # Prevent excessively long responses.
     if len(question) > 300:
-        print("Rejected: question is too long.")
+
+        print(
+            "Rejected: question is too long."
+        )
+
         return False
 
     # Must contain exactly one question mark.
     if question.count("?") != 1:
-        print("Rejected: invalid question mark count.")
+
+        print(
+            "Rejected: invalid question mark count."
+        )
+
         return False
 
     # Must end with a question mark.
     if not question.endswith("?"):
-        print("Rejected: question does not end with '?'.")
+
+        print(
+            "Rejected: question does not "
+            "end with '?'."
+        )
+
         return False
 
-    # Reject obvious multiple-choice formatting.
+    # ========================================================
+    # BLOCK MULTIPLE CHOICE / TRIVIA
+    # ========================================================
+
     blocked_patterns = [
         "A)",
         "B)",
@@ -372,18 +729,25 @@ def is_valid_question(question, history):
         "quiz"
     ]
 
-    lower_question = question.lower()
+    lower_question = (
+        question.lower()
+    )
 
     for pattern in blocked_patterns:
 
         if pattern.lower() in lower_question:
+
             print(
-                f"Rejected: blocked pattern '{pattern}'."
+                "Rejected: blocked pattern "
+                f"'{pattern}'."
             )
 
             return False
 
-    # Reject obvious yes/no questions.
+    # ========================================================
+    # BLOCK YES/NO QUESTIONS
+    # ========================================================
+
     yes_no_starts = (
         "do you ",
         "does ",
@@ -397,25 +761,48 @@ def is_valid_question(question, history):
         "have you "
     )
 
-    if lower_question.startswith(yes_no_starts):
-        print("Rejected: yes/no style question.")
+    if lower_question.startswith(
+        yes_no_starts
+    ):
+
+        print(
+            "Rejected: yes/no style question."
+        )
+
         return False
 
-    # Check for exact duplicate.
-    current_hash = question_hash(question)
+    # ========================================================
+    # DUPLICATE CHECK
+    # ========================================================
+
+    current_hash = question_hash(
+        question
+    )
 
     for item in history:
 
         if isinstance(item, dict):
 
-            if item.get("hash") == current_hash:
-                print("Rejected: duplicate question.")
+            if item.get(
+                "hash"
+            ) == current_hash:
+
+                print(
+                    "Rejected: duplicate question."
+                )
+
                 return False
 
         elif isinstance(item, str):
 
-            if question_hash(item) == current_hash:
-                print("Rejected: duplicate question.")
+            if question_hash(
+                item
+            ) == current_hash:
+
+                print(
+                    "Rejected: duplicate question."
+                )
+
                 return False
 
     return True
@@ -427,7 +814,10 @@ def is_valid_question(question, history):
 
 def get_new_question(history):
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for attempt in range(
+        1,
+        MAX_ATTEMPTS + 1
+    ):
 
         print(
             f"Generating question, "
@@ -436,7 +826,9 @@ def get_new_question(history):
 
         try:
 
-            question = generate_question(history)
+            question = generate_question(
+                history
+            )
 
             print(
                 f"Generated: {question}"
@@ -446,22 +838,27 @@ def get_new_question(history):
                 question,
                 history
             ):
+
                 return question
 
             print(
                 "Question failed validation."
             )
 
-        except RuntimeError as error:
+        except (
+            RuntimeError,
+            requests.exceptions.RequestException
+        ) as error:
 
             print(
                 f"Generation error: {error}"
             )
 
-            # Don't immediately spam the API.
             if attempt < MAX_ATTEMPTS:
+
                 print(
-                    "Waiting 5 seconds before retrying..."
+                    "Waiting 5 seconds "
+                    "before retrying..."
                 )
 
                 time.sleep(5)
@@ -479,7 +876,9 @@ def post_to_discord(question):
 
     today = datetime.now(
         timezone.utc
-    ).strftime("%B %d, %Y")
+    ).strftime(
+        "%B %d, %Y"
+    )
 
     embed = {
         "title": "💭 Question of the Day",
@@ -495,14 +894,16 @@ def post_to_discord(question):
 
         "footer": {
             "text": (
-                f"Nickolas Lilly Assistant • "
+                "Nickolas Lilly Assistant • "
                 f"{today}"
             )
         }
     }
 
     payload = {
-        "username": "Nickolas Lilly Assistant",
+        "username": (
+            "Nickolas Lilly Assistant"
+        ),
 
         "embeds": [
             embed
@@ -513,22 +914,97 @@ def post_to_discord(question):
         }
     }
 
-    response = requests.post(
-        DISCORD_WEBHOOK_URL,
-        json=payload,
-        timeout=30
-    )
-
-    if response.status_code not in (200, 204):
-
-        print("Discord response:")
-        print(response.text)
-
-        response.raise_for_status()
-
     print(
-        "Question successfully posted to Discord."
+        "Sending question to Discord..."
     )
+
+    try:
+
+        response = requests.post(
+            DISCORD_WEBHOOK_URL,
+            json=payload,
+            timeout=DISCORD_TIMEOUT
+        )
+
+        # =====================================================
+        # DISCORD RATE LIMIT
+        # =====================================================
+
+        if response.status_code == 429:
+
+            print(
+                "Discord webhook was rate limited."
+            )
+
+            retry_after = 5
+
+            try:
+
+                data = response.json()
+
+                retry_after = float(
+                    data.get(
+                        "retry_after",
+                        5
+                    )
+                )
+
+            except Exception:
+                pass
+
+            print(
+                f"Waiting {retry_after} seconds..."
+            )
+
+            time.sleep(
+                retry_after
+            )
+
+            response = requests.post(
+                DISCORD_WEBHOOK_URL,
+                json=payload,
+                timeout=DISCORD_TIMEOUT
+            )
+
+        # =====================================================
+        # DISCORD ERROR
+        # =====================================================
+
+        if response.status_code not in (
+            200,
+            204
+        ):
+
+            print(
+                "Discord response:"
+            )
+
+            print(
+                response.text
+            )
+
+            response.raise_for_status()
+
+        print(
+            "Question successfully "
+            "posted to Discord."
+        )
+
+    except requests.exceptions.Timeout as error:
+
+        print(
+            f"Discord webhook timed out: {error}"
+        )
+
+        raise
+
+    except requests.exceptions.RequestException as error:
+
+        print(
+            f"Discord webhook failed: {error}"
+        )
+
+        raise
 
 
 # =========================
@@ -544,19 +1020,33 @@ def main():
     history = load_history()
 
     print(
-        f"Loaded {len(history)} previous questions."
+        f"Loaded {len(history)} "
+        "previous questions."
     )
+
+    # ========================================================
+    # GENERATE
+    # ========================================================
 
     question = get_new_question(
         history
     )
 
+    # ========================================================
+    # DISCORD
+    # ========================================================
+
     post_to_discord(
         question
     )
 
-    # Only save the question after
-    # Discord successfully receives it.
+    # ========================================================
+    # SAVE HISTORY
+    #
+    # Only save after Discord successfully
+    # receives the question.
+    # ========================================================
+
     history.append({
         "question": question,
 
@@ -566,10 +1056,14 @@ def main():
 
         "date": datetime.now(
             timezone.utc
-        ).strftime("%Y-%m-%d")
+        ).strftime(
+            "%Y-%m-%d"
+        )
     })
 
-    history = history[-MAX_HISTORY:]
+    history = history[
+        -MAX_HISTORY:
+    ]
 
     save_history(
         history
@@ -583,6 +1077,10 @@ def main():
         "QOTD completed successfully."
     )
 
+
+# =========================
+# ENTRY POINT
+# =========================
 
 if __name__ == "__main__":
     main()
